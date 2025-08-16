@@ -1,6 +1,5 @@
 import net from "net";
 
-// Railway gives you a TCP proxy. Listen on the "application port" it forwards to:
 const PORT = Number(process.env.RAILWAY_TCP_APPLICATION_PORT || process.env.PORT || 7700);
 
 const server = net.createServer((socket) => {
