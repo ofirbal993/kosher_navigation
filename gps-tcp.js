@@ -114,12 +114,12 @@ function printPacket(pkt) {
 
 // ---- Server with robust framing ----
 const server = net.createServer((socket) => {
-  console.log(`📡 Connected: ${socket.remoteAddress}:${socket.remotePort}`);
+  console.log(`📡 Connected: ${socket.remoteAddress}:${socket.remotePort} | v1`);
   let buffer = ""; // accumulate between chunks
 
   socket.on("data", (chunk) => {
-    console.log("📥 Raw:", chunk);
     buffer += chunk.toString("utf8");
+    console.log("📥 Raw:", chunk);
 
     // messages framed by '*' ... '#'
     while (true) {
