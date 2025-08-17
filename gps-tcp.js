@@ -119,7 +119,7 @@ const server = net.createServer((socket) => {
 
   socket.on("data", (chunk) => {
     buffer += chunk.toString("utf8");
-    console.log("📥 Raw:", chunk);
+    console.log("📥 Raw:", buffer);
 
     // messages framed by '*' ... '#'
     while (true) {
