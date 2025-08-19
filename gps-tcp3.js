@@ -153,15 +153,17 @@ const server = net.createServer(socket => {
         continue;
       }
 
-      console.log("\n── Frame ─────────────────────────");
-      console.log("RAW HEX:", hex(frame));
-      console.log(`msgId=0x${p.msgId.toString(16).padStart(4,"0")} seq=${p.seq} term=${p.term} bodyLen=${p.body.length} cs=${p.csOk ? "OK" : "BAD"}`);
+      if (DEBUG) {
+        console.log("\n── Frame ─────────────────────────");
+        console.log("RAW HEX:", hex(frame));
+        console.log(`msgId=0x${p.msgId.toString(16).padStart(4,"0")} seq=${p.seq} term=${p.term} bodyLen=${p.body.length} cs=${p.csOk ? "OK" : "BAD"}`);
+      }
 
       // Acknowledge required messages
       if (p.msgId === 0x0100 || p.msgId === 0x0102 || p.msgId === 0x0200) {
         const ack = buildAck(p);
         socket.write(ack);
-        console.log(`→ send 0x8001 (ack)`);
+        if (DEBUG) console.log(`→ send 0x8001 (ack)`);
       }
 
       // Print location report
