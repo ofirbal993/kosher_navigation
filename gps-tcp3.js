@@ -73,7 +73,8 @@ const server = net.createServer((socket) => {
         }
 
         // === print location if present ===
-        if (p.msgId === 0x0200 && p.loc) {
+        if ( p.loc) {
+          //if (p.msgId === 0x0200 && p.loc) {
           if (PRINT_LOC === "json") {
             console.log(JSON.stringify(p.loc));
           } else {
