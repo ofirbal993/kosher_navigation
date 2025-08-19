@@ -5,13 +5,13 @@
  * Receives and processes GPS data from MiCODUS MV77G devices
  */
 
-const net = require('net');
-const express = require('express');
+import net from 'net';
+import express from 'express';
 
 class MV77GServer {
     constructor() {
         // Railway provides PORT environment variable
-        this.tcpPort = process.env.GPS_PORT || 5023;
+        this.tcpPort = process.env.GPS_PORT || 7700;
         this.httpPort = process.env.PORT || 3000; // Railway requires HTTP server on PORT
         this.host = '0.0.0.0';
         
