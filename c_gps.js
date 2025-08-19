@@ -12,7 +12,7 @@ class MV77GServer {
     constructor() {
         // Railway provides PORT environment variable
         this.tcpPort = process.env.GPS_PORT || 7700;
-        this.httpPort = process.env.PORT || 3000; // Railway requires HTTP server on PORT
+        this.httpPort = 3000 || process.env.PORT; // Railway requires HTTP server on PORT
         this.host = '0.0.0.0';
         
         this.tcpServer = null;
