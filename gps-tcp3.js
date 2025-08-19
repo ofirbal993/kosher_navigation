@@ -1,51 +1,96 @@
 // simple-gps-server.js  (ESM)
-// Env: RAILWAY_TCP_APPLICATION_PORT or PORT or 7700
+// Env:
+//  - RAILWAY_TCP_APPLICATION_PORT or PORT (listen)
+//  - DEBUG_JT=1          -> verbose JT logs
+//  - DEBUG_BREAK=1       -> log when while-loop breaks / buffer trim
+//  - PRINT_LOC=line|json -> how to print 0x0200 locations
+
 import net from "net";
 
 const PORT = Number(process.env.RAILWAY_TCP_APPLICATION_PORT || process.env.PORT || 7700);
+const DEBUG = String(process.env.DEBUG_JT || "") === "1";
+const DEBUG_BREAK = String(process.env.DEBUG_BREAK || "") === "1";
+const PRINT_LOC = (process.env.PRINT_LOC || "line").toLowerCase();
 
 const server = net.createServer((socket) => {
   console.log(`📡 Connected: ${socket.remoteAddress}:${socket.remotePort}`);
   let buf = Buffer.alloc(0);
 
   socket.on("data", (chunk) => {
-    console.log('>>> data', chunk.toString('hex'))
     buf = Buffer.concat([buf, chunk]);
 
     while (true) {
       const s = buf.indexOf(0x7e);
-      if (s === -1) break;
+      if (s === -1) {
+        if (DEBUG_BREAK) console.log(`↪ break: no-start-delimiter (buffer len=${buf.length})`);
+        break;
+      }
       const e = buf.indexOf(0x7e, s + 1);
-      if (e === -1) break;
+      if (e === -1) {
+        if (DEBUG_BREAK) console.log(`↪ break: no-end-delimiter yet (buffer len=${buf.length}, startAt=${s})`);
+        break;
+      }
 
       const frame = buf.slice(s, e + 1);
       buf = buf.slice(e + 1);
 
       try {
         const p = parseFrame(frame);
-        if (!p) continue;
-
-        // ACKs (שומרים על חיבור יציב)
-        if (p.msgId === 0x0100) {
-          // Register/Login → 0x8100
-          socket.write(build8100(p.terminal, p.seq, 0x00, "OK"));
-        } else if (p.msgId === 0x0002 || p.msgId === 0x0200) {
-          // Heartbeat/Location → 0x8001
-          socket.write(build8001(p.terminal, p.seq, p.msgId, 0x00));
+        if (!p) {
+          if (DEBUG_BREAK) console.log("↯ skipped: parseFrame returned null (bad delimiters / too short / checksum)");
+          continue;
         }
 
-        // הדפסת מיקום פשוטה
+        if (DEBUG) {
+          console.log("── Frame ─────────────────────────");
+          console.log("RAW HEX:", hex(frame));
+          console.log(`msgId=0x${p.msgId.toString(16).padStart(4,"0")} seq=${p.seq} term=${p.terminal} bodyLen=${p.bodyLen} cs=${p.csOk?"OK":"BAD"}`);
+        }
+
+        // === ACKs ===
+        switch (p.msgId) {
+          case 0x0100: // Register/Login
+            if (DEBUG) console.log("→ send 0x8100 (register response)");
+            socket.write(build8100(p.terminal, p.seq, 0x00, "OK"));
+            break;
+          case 0x0102: // Authentication
+            if (DEBUG) console.log("→ send 0x8001 (auth ack)");
+            socket.write(build8001(p.terminal, p.seq, p.msgId, 0x00));
+            break;
+          case 0x0002: // Heartbeat
+            if (DEBUG) console.log("→ send 0x8001 (hb ack)");
+            socket.write(build8001(p.terminal, p.seq, p.msgId, 0x00));
+            break;
+          case 0x0200: // Location
+            if (DEBUG) console.log("→ send 0x8001 (loc ack)");
+            socket.write(build8001(p.terminal, p.seq, p.msgId, 0x00));
+            break;
+          case 0x0003: // Logout
+            if (DEBUG) console.log("→ logout (no ack required)");
+            break;
+          default:
+            if (DEBUG) console.log("→ unhandled msgId (no ack)");
+        }
+
+        // === print location if present ===
         if (p.msgId === 0x0200 && p.loc) {
-          const { time_utc, latitude, longitude, speed_kmh } = p.loc;
-          console.log(`${time_utc} lat=${latitude} lon=${longitude} speed=${speed_kmh}km/h`);
+          if (PRINT_LOC === "json") {
+            console.log(JSON.stringify(p.loc));
+          } else {
+            const { time_utc, latitude, longitude, speed_kmh } = p.loc;
+            console.log(`${time_utc} lat=${latitude} lon=${longitude} speed=${speed_kmh}km/h`);
+          }
         }
 
-      } catch {
-        // מתעלמים משגיאות פרסינג כדי לא להפיל חיבור
+      } catch (err) {
+        console.error("❌ parse error:", err.message);
       }
     }
 
-    if (buf.length > 65536) buf = buf.slice(-4096);
+    if (buf.length > 65536) {
+      if (DEBUG_BREAK) console.log(`↯ buffer trimmed (from ${buf.length} to 4096)`);
+      buf = buf.slice(-4096);
+    }
   });
 
   socket.on("end", () => console.log("❌ Disconnected"));
@@ -56,58 +101,64 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ TCP server listening on ${PORT}`);
 });
 
-/* ----------------- Minimal JT808 ----------------- */
+/* ───────── Minimal JT808 parsing ───────── */
 
 function parseFrame(frame) {
-  if (frame[0] !== 0x7e || frame[frame.length - 1] !== 0x7e) return null;
+  if (frame[0] !== 0x7e || frame[frame.length - 1] !== 0x7e) {
+    if (DEBUG_BREAK) console.log("↯ parseFrame: bad 0x7E delimiters");
+    return null;
+  }
   let b = unescape(frame.slice(1, -1));
-  if (b.length < 13) return null;
+  if (b.length < 13) {
+    if (DEBUG_BREAK) console.log(`↯ parseFrame: too short after unescape (${b.length} bytes)`);
+    return null;
+  }
 
-  // checksum
   const cs = b[b.length - 1];
   const data = b.slice(0, -1);
   let x = 0; for (const v of data) x ^= v;
-  if (x !== cs) return null;
+  const csOk = (x === cs);
+  if (!csOk) {
+    if (DEBUG_BREAK) console.log(`↯ parseFrame: checksum mismatch (calc=0x${x.toString(16)}, got=0x${cs.toString(16)})`);
+    return null;
+  }
 
-  // header
   const msgId = (data[0] << 8) | data[1];
   const props = (data[2] << 8) | data[3];
   const bodyLen = props & 0x03ff;
-  const terminal = bcdToString(data.slice(4, 10)); // 6B BCD (מס' מסוף/טלפון)
+  const terminal = bcdToString(data.slice(4, 10));
   const seq = (data[10] << 8) | data[11];
 
   let off = 12;
-  if (props & 0x2000) { // subpackaged
-    off = 16; // מתעלמים מפרטי תת-חלוקה בגרסה הפשוטה
-  }
+  if (props & 0x2000) off = 16; // subpackaged metadata present (ignored in simple parser)
+
   const body = data.slice(off, off + bodyLen);
+  const out = { msgId, terminal, seq, bodyLen, csOk };
 
-  const out = { msgId, terminal, seq };
-
-  // 0x0200 – Location report (שדות חובה בלבד)
+  // 0x0200 Location
   if (msgId === 0x0200 && body.length >= 28) {
     let i = 0;
-    /* alarm */ i += 4;
-    /* status */ i += 4;
+    i += 4; // alarm
+    i += 4; // status
     const lat = body.readUInt32BE(i); i += 4;
     const lon = body.readUInt32BE(i); i += 4;
-    /* alt  */ i += 2;
-    const spd = body.readUInt16BE(i); i += 2;      // 0.1 km/h
-    /* course */ i += 2;
+    i += 2; // alt
+    const spd = body.readUInt16BE(i); i += 2; // 0.1 km/h
+    i += 2; // course
     const ts = body.slice(i, i + 6);
 
     out.loc = {
+      time_utc: bcdTime(ts),
       latitude: +(lat / 1e6).toFixed(6),
       longitude: +(lon / 1e6).toFixed(6),
       speed_kmh: +(spd / 10).toFixed(1),
-      time_utc: bcdTime(ts)
     };
   }
 
   return out;
 }
 
-/* ----------------- ACK builders ----------------- */
+/* ───────── ACK builders ───────── */
 
 let seqCounter = 1;
 function nextSeq() { seqCounter = (seqCounter + 1) & 0xffff; return seqCounter || 1; }
@@ -131,24 +182,20 @@ function build8100(terminal, origSeq, result /*0=success*/, auth = "") {
 
 function buildFrame(msgId, terminalStr, seq, body) {
   const phoneBcd = strToBcd((terminalStr || "").padStart(12, "0").slice(-12));
-  const props = body.length & 0x03ff; // no encryption/subpack
+  const props = body.length & 0x03ff;
   const head = Buffer.alloc(12);
   head.writeUInt16BE(msgId, 0);
   head.writeUInt16BE(props, 2);
   phoneBcd.copy(head, 4);
   head.writeUInt16BE(seq, 10);
   const data = Buffer.concat([head, body]);
-
-  // checksum
   let cs = 0x00; for (const b of data) cs ^= b;
   const withCs = Buffer.concat([data, Buffer.from([cs])]);
-
-  // escape & wrap
   const escaped = escape(withCs);
   return Buffer.concat([Buffer.from([0x7e]), escaped, Buffer.from([0x7e])]);
 }
 
-/* ----------------- Utils ----------------- */
+/* ───────── Utils ───────── */
 
 function unescape(buf) {
   const out = [];
@@ -163,7 +210,6 @@ function unescape(buf) {
   }
   return Buffer.from(out);
 }
-
 function escape(buf) {
   const out = [];
   for (const b of buf) {
@@ -173,7 +219,6 @@ function escape(buf) {
   }
   return Buffer.from(out);
 }
-
 function bcdToString(buf) {
   let s = "";
   for (const b of buf) {
@@ -183,7 +228,6 @@ function bcdToString(buf) {
   }
   return s.replace(/^0+/, "");
 }
-
 function strToBcd(str) {
   const out = Buffer.alloc(6);
   for (let i = 0; i < 6; i++) {
@@ -193,7 +237,6 @@ function strToBcd(str) {
   }
   return out;
 }
-
 function bcdTime(buf6) {
   if (!buf6 || buf6.length < 6) return "";
   const yy = ((buf6[0] >> 4) & 0x0f) * 10 + (buf6[0] & 0x0f);
@@ -205,3 +248,4 @@ function bcdTime(buf6) {
   const fullY = yy < 80 ? 2000 + yy : 1900 + yy;
   return new Date(Date.UTC(fullY, mm - 1, dd, hh, mi, ss)).toISOString();
 }
+function hex(buf) { return [...buf].map(b => b.toString(16).padStart(2,"0")).join(" "); }
