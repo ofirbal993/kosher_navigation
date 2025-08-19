@@ -9,6 +9,7 @@ const server = net.createServer((socket) => {
   let buf = Buffer.alloc(0);
 
   socket.on("data", (chunk) => {
+    console.log('>>> data', chunk.toString('hex'))
     buf = Buffer.concat([buf, chunk]);
 
     while (true) {
