@@ -1,7 +1,7 @@
 // gps-tcp.js
 // Simple TCP server for Micodus MV77G (JT808-like protocol) with logging and TLV parsing
 
-const net = require("net");
+import net from "net";
 
 // Environment options
 const PORT = process.env.PORT || 7700;
